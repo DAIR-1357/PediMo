@@ -1,0 +1,204 @@
+// Esquema de Pedimo. Fuente: docs/Pedimo_Requerimientos.docx (v0.3), sección 7.
+// Montos de dinero en Decimal(10,2). Porcentajes en Decimal(5,2) (10.00 = 10%).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EstadoAlta {
+  ACTIVO
+  SUSPENDIDO
+  BAJA
+}
+
+enum EstadoPedido {
+  PENDIENTE
+  ASIGNADO
+  RECOGIDO
+  ENTREGADO
+  CANCELADO
+  DEVUELTO
+}
+
+enum EstadoCorte {
+  PENDIENTE
+  PAGADO
+}
+
+enum EstadoReclamo {
+  ABIERTO
+  APROBADO
+  RECHAZADO
+}
+
+model Restaurante {
+  id                 Int            @id @default(autoincrement())
+  nombre             String
+  direccion          String
+  contacto           String
+  comisionPorcentaje Decimal        @default(10) @db.Decimal(5, 2)
+  estado             EstadoAlta     @default(ACTIVO)
+  fechaAlta          DateTime       @default(now())
+  productos          ProductoMenu[]
+  pedidos            Pedido[]
+  cortes             Corte[]
+
+  @@map("restaurantes")
+}
+
+model ProductoMenu {
+  id              Int              @id @default(autoincrement())
+  restauranteId   Int
+  restaurante     Restaurante      @relation(fields: [restauranteId], references: [id])
+  nombre          String
+  precio          Decimal          @db.Decimal(10, 2)
+  activo          Boolean          @default(true)
+  pedidoProductos PedidoProducto[]
+
+  @@index([restauranteId])
+  @@map("productos_menu")
+}
+
+model Repartidor {
+  id               Int               @id @default(autoincrement())
+  nombre           String
+  telefono         String
+  ine              String // Dato personal sensible (LFPDPPP)
+  capitalMaximo    Decimal           @default(500) @db.Decimal(10, 2)
+  estado           EstadoAlta        @default(ACTIVO)
+  fechaAlta        DateTime          @default(now())
+  pedidos          Pedido[]
+  entregasEfectivo EntregaEfectivo[]
+
+  @@map("repartidores")
+}
+
+model Pedido {
+  id                  Int              @id @default(autoincrement())
+  restauranteId       Int
+  restaurante         Restaurante      @relation(fields: [restauranteId], references: [id])
+  repartidorId        Int?
+  repartidor          Repartidor?      @relation(fields: [repartidorId], references: [id])
+  corteId             Int?
+  corte               Corte?           @relation(fields: [corteId], references: [id])
+  dia                 DateTime         @db.Date
+  clienteNombre       String
+  clienteTelefono     String
+  clienteDireccion    String
+  claveEntrega        String
+  montoComida         Decimal          @db.Decimal(10, 2)
+  distanciaKm         Decimal          @db.Decimal(5, 2)
+  // Montos calculados al registrar el pedido (foto del momento).
+  tarifaCliente       Decimal          @db.Decimal(10, 2)
+  pagoRepartidor      Decimal          @db.Decimal(10, 2)
+  comisionEnvio       Decimal          @db.Decimal(10, 2)
+  comisionRestaurante Decimal          @db.Decimal(10, 2)
+  estado              EstadoPedido     @default(PENDIENTE)
+  creadoEn            DateTime         @default(now())
+  actualizadoEn       DateTime         @updatedAt
+  productos           PedidoProducto[]
+  reclamos            Reclamo[]
+
+  @@index([restauranteId, dia])
+  @@index([repartidorId, dia])
+  @@index([estado])
+  @@map("pedidos")
+}
+
+model PedidoProducto {
+  id             Int          @id @default(autoincrement())
+  pedidoId       Int
+  pedido         Pedido       @relation(fields: [pedidoId], references: [id])
+  productoId     Int
+  producto       ProductoMenu @relation(fields: [productoId], references: [id])
+  cantidad       Int
+  precioUnitario Decimal      @db.Decimal(10, 2) // Precio al momento del pedido
+
+  @@index([pedidoId])
+  @@map("pedido_productos")
+}
+
+model Tarifa {
+  id            Int       @id @default(autoincrement())
+  hastaKm       Decimal   @db.Decimal(4, 2) // Límite superior incluido
+  tarifaCliente Decimal   @db.Decimal(10, 2)
+  vigenteDesde  DateTime  @default(now())
+  vigenteHasta  DateTime?
+
+  @@map("tarifas")
+}
+
+model Parametros {
+  id                         Int       @id @default(autoincrement())
+  comisionEnvioPorcentaje    Decimal   @default(10) @db.Decimal(5, 2)
+  pagoMinimoRepartidor       Decimal   @default(15) @db.Decimal(10, 2)
+  comisionRestauranteDefault Decimal   @default(10) @db.Decimal(5, 2)
+  vigenteDesde               DateTime  @default(now())
+  vigenteHasta               DateTime?
+
+  @@map("parametros")
+}
+
+model Corte {
+  id            Int         @id @default(autoincrement())
+  restauranteId Int
+  restaurante   Restaurante @relation(fields: [restauranteId], references: [id])
+  periodoInicio DateTime    @db.Date
+  periodoFin    DateTime    @db.Date
+  montoTotal    Decimal     @db.Decimal(10, 2)
+  descuentos    Decimal     @default(0) @db.Decimal(10, 2)
+  fechaPago     DateTime?
+  estado        EstadoCorte @default(PENDIENTE)
+  pedidos       Pedido[]
+  reclamos      Reclamo[]
+
+  @@unique([restauranteId, periodoInicio])
+  @@map("cortes")
+}
+
+model Reclamo {
+  id             Int           @id @default(autoincrement())
+  pedidoId       Int
+  pedido         Pedido        @relation(fields: [pedidoId], references: [id])
+  corteId        Int?
+  corte          Corte?        @relation(fields: [corteId], references: [id])
+  motivo         String
+  evidencia      String
+  montoDescontar Decimal       @db.Decimal(10, 2)
+  estado         EstadoReclamo @default(ABIERTO)
+  creadoEn       DateTime      @default(now())
+
+  @@index([pedidoId])
+  @@map("reclamos")
+}
+
+model EntregaEfectivo {
+  id             Int        @id @default(autoincrement())
+  repartidorId   Int
+  repartidor     Repartidor @relation(fields: [repartidorId], references: [id])
+  fecha          DateTime   @default(now())
+  montoEntregado Decimal    @db.Decimal(10, 2)
+  montoPendiente Decimal    @db.Decimal(10, 2)
+
+  @@index([repartidorId, fecha])
+  @@map("entregas_efectivo")
+}
+
+model Auditoria {
+  id            Int      @id @default(autoincrement())
+  entidad       String
+  entidadId     String
+  accion        String
+  valorAnterior Json?
+  valorNuevo    Json?
+  usuario       String // Sin tabla de usuarios hasta tener autenticación
+  fecha         DateTime @default(now())
+
+  @@index([entidad, entidadId])
+  @@map("auditoria")
+}
